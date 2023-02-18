@@ -5,15 +5,14 @@ const User = require("./models/User");
 const Place = require("./models/Place");
 const Booking = require("./models/Booking");
 const bcrypt = require("bcryptjs");
-String.prototype.toObjectId = function () {
-  var ObjectId = require("mongoose").Types.ObjectId;
-  return new ObjectId(this.toString());
-};
+// String.prototype.toObjectId = function () {
+//   var ObjectId = require("mongoose").Types.ObjectId;
+//   return new ObjectId(this.toString());
+// };
+//TODO:APPLY MESSAGE VONAGE DURING REGISTERATION
 // const { Vonage } = require("@vonage/server-sdk");
-
-const stripe = require("stripe")(
-  "sk_test_51KNXbXSCQUIMF4gQrSpjOQbxxMBzQOzoXv5YHCG9cetv7wAekwy0MF96pUF6Hc5X0YA3Y3A96SR4Y35Z1xigRTX500t9UW1VK3"
-);
+dotenv.config();
+const stripe = require("stripe")(process.env.STRIPE_KEY);
 const jwt = require("jsonwebtoken");
 const { format, differenceInCalendarDays} = require("date-fns");
 const cookieParser = require("cookie-parser");
@@ -22,7 +21,7 @@ const multer = require("multer");
 const fs = require("fs");
 const salt = bcrypt.genSaltSync(12);
 const jwtSecret = "dfgdrdfbdrzxrqacbfbzdfgb";
-dotenv.config();
+
 const cors = require("cors");
 const app = express();
 
@@ -261,14 +260,15 @@ app.post("/booking", async (req, res) => {
               },
               unit_amount: price * 100,
             },
+           
             quantity: 1,
           },
         ],
         mode: "payment",
         success_url: `http://127.0.0.1:5173/account/bookings/${bookPlace._id}`,
-        cancel_url: "http://localhost:4242/cancel",
+        cancel_url: `http://127.0.0.1:5173/cancel/${bookPlace._id}`,
       });
-
+     // console.log(session);
       res.send({ url: session.url });
     });
   } catch (error) {
@@ -366,6 +366,19 @@ app.post("/check-same-date", async (req, res) => {
     res.status(400).json({ err });
   }
 });
+
+app.get('/booking/:id',async(req,res)=>{
+  const {id}=req.params;
+ // console.log(id);
+  try {
+    const booking=await Booking.findById(id);
+   // console.log(booking);
+   await Booking.deleteOne({_id:id});
+    res.status(200).json({placeId:booking.place.toString()});
+  } catch (error) {
+    res.status(400).json({error});
+  }
+})
 
 app.listen(4000, () => {
   console.log("listening on port 4000");
