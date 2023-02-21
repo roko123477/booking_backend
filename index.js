@@ -5,29 +5,36 @@ const User = require("./models/User");
 const Place = require("./models/Place");
 const Booking = require("./models/Booking");
 const bcrypt = require("bcryptjs");
-// String.prototype.toObjectId = function () {
-//   var ObjectId = require("mongoose").Types.ObjectId;
-//   return new ObjectId(this.toString());
-// };
-//TODO:APPLY MESSAGE VONAGE DURING REGISTERATION
-// const { Vonage } = require("@vonage/server-sdk");
+const otpGenerator = require("otp-generator");
+const nodemailer = require("nodemailer");
+const Mailgen = require("mailgen");
+let OTP = "";
 dotenv.config();
+
+const EMAIL = process.env.EMAIL;
+const PASS = process.env.PASSWORD;
+
 const stripe = require("stripe")(process.env.STRIPE_KEY);
 const jwt = require("jsonwebtoken");
-const { format, differenceInCalendarDays} = require("date-fns");
+const { format, differenceInCalendarDays } = require("date-fns");
 const cookieParser = require("cookie-parser");
+
 const imageDownloader = require("image-downloader");
 const multer = require("multer");
+const { storage, cloudinary } = require("./cloudinary");
+const uploadMiddleware = multer({ storage });
 const fs = require("fs");
 const salt = bcrypt.genSaltSync(12);
-const jwtSecret = "dfgdrdfbdrzxrqacbfbzdfgb";
+const jwtSecret = process.env.JWT_SECRET;
 
 const cors = require("cors");
 const app = express();
-
+app.disable("x-powered-by");
 app.use(cookieParser());
+
 app.use("/uploads", express.static(__dirname + "/uploads"));
-app.use(express.json());
+app.use(express.json({ limit: "50mb" }));
+
 app.use(
   cors({
     credentials: true,
@@ -46,7 +53,7 @@ app.get("/test", (req, res) => {
 });
 
 app.post("/register", async (req, res) => {
-  const { name, email, phone, password } = req.body;
+  const { firstname, lastname, email, password, phone, file } = req.body;
   try {
     // const from = "Vonage APIs";
     // const to = "91"+phone;
@@ -54,10 +61,13 @@ app.post("/register", async (req, res) => {
     // await vonage.sms.send({to, from, text})
     //     .then(resp => { console.log('Message sent successfully'); console.log(resp); })
     //     .catch(err => { console.log('There was an error sending the messages.'); console.error(err); });
+    //console.log(req.body);
     const createdUser = await User.create({
-      name,
+      firstname,
+      lastname,
+      file,
       email,
-      phonenumber: bcrypt.hashSync(phone, salt),
+      phonenumber: phone,
       password: bcrypt.hashSync(password, salt),
     });
     res.status(200).json(createdUser);
@@ -70,11 +80,12 @@ app.post("/login", async (req, res) => {
   const { email, password } = req.body;
   try {
     const userDoc = await User.findOne({ email });
+
     if (userDoc) {
       const passOk = bcrypt.compareSync(password, userDoc.password);
       if (passOk) {
         jwt.sign(
-          { email: userDoc.email, id: userDoc._id },
+          { name: userDoc.firstname, email: userDoc.email, id: userDoc._id },
           jwtSecret,
           {},
           (err, token) => {
@@ -98,8 +109,8 @@ app.get("/profile", (req, res) => {
   if (token) {
     jwt.verify(token, jwtSecret, {}, async (err, user) => {
       if (err) throw err;
-      const { name, email, _id } = await User.findById(user.id);
-      res.status(200).json({ name, email, _id });
+      const { firstname, email, _id } = await User.findById(user.id);
+      res.status(200).json({ name: firstname, email, _id });
     });
   } else {
     res.json(null);
@@ -112,26 +123,38 @@ app.post("/logout", (req, res) => {
 
 app.post("/upload-by-link", async (req, res) => {
   const { link } = req.body;
-  const newName = "photo" + Date.now() + ".jpg";
-  await imageDownloader.image({
-    url: link,
-    dest: __dirname + "/uploads/" + newName,
+  const result = await cloudinary.uploader.upload(link, {
+    folder: "pibook",
   });
-  res.json(newName);
+
+  const getFilename = result.url.split("/");
+  const getExactFilename = getFilename[getFilename.length - 1].split(".")[0];
+  const fullFilename =
+    getFilename[getFilename.length - 2] + "/" + getExactFilename;
+  //console.log(fullFilename);
+  let imageFiles = {
+    url: result.secure_url,
+    filename: fullFilename,
+  };
+  res.status(200).json(imageFiles);
 });
 
-const photosMiddleware = multer({ dest: "uploads/" });
-app.post("/upload", photosMiddleware.array("photos", 100), (req, res) => {
-  const uploadedFiles = [];
-  for (let i = 0; i < req.files.length; i++) {
-    const { path, originalname } = req.files[i];
-    const parts = originalname.split(".");
-    const ext = parts[parts.length - 1];
-    const newPath = path + "." + ext;
-    fs.renameSync(path, newPath);
-    uploadedFiles.push(newPath.replace("uploads\\", ""));
-  }
-  res.json(uploadedFiles);
+app.post("/upload", uploadMiddleware.array("photos", 100), (req, res) => {
+  // const uploadedFiles = [];
+  // for (let i = 0; i < req.files.length; i++) {
+  //   const { path, originalname } = req.files[i];
+  //   const parts = originalname.split(".");
+  //   const ext = parts[parts.length - 1];
+  //   const newPath = path + "." + ext;
+  //   fs.renameSync(path, newPath);
+  //   uploadedFiles.push(newPath.replace("uploads\\", ""));
+  // }
+  // console.log(req.files);
+  let imageFiles = req.files.map((file) => ({
+    url: file.path,
+    filename: file.filename,
+  }));
+  res.json(imageFiles);
 });
 
 app.post("/places", async (req, res) => {
@@ -172,11 +195,17 @@ app.post("/places", async (req, res) => {
 
 app.get("/user-places", (req, res) => {
   const { token } = req.cookies;
-  jwt.verify(token, jwtSecret, {}, async (err, user) => {
-    if (err) throw err;
-    const { id } = user;
-    res.json(await Place.find({ owner: id }));
-  });
+  try {
+    if (token) {
+      jwt.verify(token, jwtSecret, {}, async (err, user) => {
+        if (err) throw err;
+        const { id } = user;
+        res.status(200).json(await Place.find({ owner: id }));
+      });
+    }
+  } catch (error) {
+    res.status(400).json({ error });
+  }
 });
 
 app.get("/places/:id", async (req, res) => {
@@ -223,7 +252,7 @@ app.put("/places", async (req, res) => {
 });
 
 app.get("/places", async (req, res) => {
-  res.json(await Place.find());
+  res.json(await Place.find().sort({ address: -1 }));
 });
 
 app.post("/booking", async (req, res) => {
@@ -254,13 +283,11 @@ app.post("/booking", async (req, res) => {
               currency: "inr",
               product_data: {
                 name: "booking for Mr " + name + " for room " + places.title,
-                images: [
-                  "https://res.cloudinary.com/dg4iksxsb/image/upload/v1676121545/Blogs/sy8pg0ixii4z1kujbicf.webp",
-                ],
+                images: [places.photos[0].url],
               },
               unit_amount: price * 100,
             },
-           
+
             quantity: 1,
           },
         ],
@@ -268,7 +295,7 @@ app.post("/booking", async (req, res) => {
         success_url: `http://127.0.0.1:5173/account/bookings/${bookPlace._id}`,
         cancel_url: `http://127.0.0.1:5173/cancel/${bookPlace._id}`,
       });
-     // console.log(session);
+      // console.log(session);
       res.send({ url: session.url });
     });
   } catch (error) {
@@ -293,8 +320,20 @@ app.delete("/user-places/delete/:id", async (req, res) => {
   const { id } = req.params;
   // console.log(id);
   try {
+    const place = await Place.findById(id);
     await Place.deleteOne({ _id: id });
-    await Booking.deleteOne({ place: id });
+    const allbookings = await Booking.find();
+    const bookingsfilter = allbookings.filter(
+      (booking) => booking.place.toString() === id.toString()
+    );
+    for (let i = 0; i < place.photos.length; i++) {
+      // console.log(place.photos[i].filename);
+      await cloudinary.uploader.destroy(place.photos[i].filename);
+    }
+    for (let booking of bookingsfilter) {
+      await Booking.deleteOne(booking);
+    }
+    // console.log(bookingsfilter);
     res.status(200).json("place removed successfully");
   } catch (error) {
     res.status(400).json({ error });
@@ -339,46 +378,197 @@ app.post("/check-same-date", async (req, res) => {
       var check1 = new Date(c[0], parseInt(c[1]) - 1, c[2]);
       var check2 = new Date(d[0], parseInt(d[1]) - 1, d[2]);
       if (check1 >= from && check1 <= to) {
-        dateBetween=true;
-       // console.log(dateBetween);
+        dateBetween = true;
+        // console.log(dateBetween);
       } else if (check2 >= from && check2 <= to) {
-        dateBetween=true;
-     //   console.log(dateBetween);
+        dateBetween = true;
+        //   console.log(dateBetween);
       } else if (check1 <= from && check2 >= to) {
-        dateBetween=true;
-      //  console.log(dateBetween);
+        dateBetween = true;
+        //  console.log(dateBetween);
       } else if (check1 >= from && check2 <= to) {
-        dateBetween=true;
-       // console.log(dateBetween);
+        dateBetween = true;
+        // console.log(dateBetween);
       } else {
-        dateBetween=false;
+        dateBetween = false;
       }
     }
-    if(!dateBetween){
-      noofnights=( differenceInCalendarDays(
+    if (!dateBetween) {
+      noofnights = differenceInCalendarDays(
         new Date(checkOut),
         new Date(checkIn)
-      ));
+      );
     }
     //console.log(dateBetween,noofnights);
-    res.status(200).json({noofnights});
+    res.status(200).json({ noofnights });
   } catch (err) {
     res.status(400).json({ err });
   }
 });
 
-app.get('/booking/:id',async(req,res)=>{
-  const {id}=req.params;
- // console.log(id);
+app.get("/booking/:id", async (req, res) => {
+  const { id } = req.params;
+  // console.log(id);
   try {
-    const booking=await Booking.findById(id);
-   // console.log(booking);
-   await Booking.deleteOne({_id:id});
-    res.status(200).json({placeId:booking.place.toString()});
+    const booking = await Booking.findById(id);
+    // console.log(booking);
+    await Booking.deleteOne({ _id: id });
+    res.status(200).json({ placeId: booking.place.toString() });
+  } catch (error) {
+    res.status(400).json({ error });
+  }
+});
+
+app.delete("/delete/images", async (req, res) => {
+  const { fileObject } = req.body;
+  //console.log(fileObject);
+  try {
+    await cloudinary.uploader.destroy(fileObject.filename);
+    res.status(200).json({ success: "file deleted successfully" });
+  } catch (error) {
+    res.status(400).json({ error });
+  }
+});
+
+app.get("/countnumberofusers", async (req, res) => {
+  try {
+    const userCount = await User.countDocuments({}).exec();
+    res.status(200).json(userCount);
+  } catch (err) {
+    res.status(400).json({ err });
+  }
+});
+
+app.get("/getuserdetails/:id", async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    //console.log(id);
+    const user = await User.findOne({ _id: id });
+    res.status(200).json(user);
+  } catch (error) {
+    res.status(400).json({ error });
+  }
+});
+
+app.put("/profileupdate", async (req, res) => {
+  const { id, phone, firstname, lastname, email, file } = req.body;
+  //console.log(id,phone,firstname,lastname,email,file);
+  try {
+    await User.findOneAndUpdate(
+      { _id: id },
+      {
+        phonenumber: phone,
+        firstname: firstname,
+        lastname: lastname,
+        email: email,
+        file: file,
+      }
+    );
+    res.status(200).json("updated successfully");
+  } catch (err) {
+    res.status(400).json({ err });
+  }
+});
+
+app.get("/generateotp/:id", async (req, res) => {
+  const { id } = req.params;
+  //console.log(id);
+
+  OTP = await otpGenerator.generate(6, {
+    lowerCaseAlphabets: false,
+    upperCaseAlphabets: false,
+    specialChars: false,
+  });
+  const user = await User.findOne({ _id: id });
+
+  //
+  let userEmail = user.email;
+
+  let config = {
+    service: "gmail",
+    auth: {
+      user: EMAIL,
+      pass: PASS,
+    },
+  };
+
+  let transporter = nodemailer.createTransport(config);
+
+  let MailGenerator = new Mailgen({
+    theme: "default",
+    product: {
+      name: "Mailgen",
+      link: "https://mailgen.js/",
+    },
+  });
+
+  let response = {
+    body: {
+      name: user.firstname + " " + user.lastname,
+      intro: "One Time Password generated!",
+      table: {
+        data: [
+          {
+            description: `Your one time password (OTP) to change pibook password is ${OTP}`,
+          },
+        ],
+      },
+    },
+  };
+
+  let mail = MailGenerator.generate(response);
+
+  let message = {
+    from: EMAIL,
+    to: userEmail,
+    subject: "password change request",
+    html: mail,
+  };
+
+  transporter
+    .sendMail(message)
+    .then(() => {
+      return res.status(201).json({
+        msg: "you should receive an email",
+      });
+    })
+    .catch((error) => {
+      return res.status(500).json({ error });
+    });
+});
+
+app.get("/verifyotp", (req, res) => {
+  const { otp } = req.query;
+  try {
+    if (parseInt(otp) === parseInt(OTP)) {
+      res.status(200).json("valid otp");
+    } else {
+      res.status(200).json("");
+    }
+  } catch (error) {
+    res.status(400).json({ error });
+  }
+});
+
+app.post("/changepass", async(req, res) => {
+  const{oldpass,newpass,id}=req.body;
+  try {
+    const user=await User.findOne({_id:id});
+    const passOk = bcrypt.compareSync(oldpass, user.password);
+    if(!passOk){
+      res.status(200).json("");
+    }
+    else{
+      await User.findOneAndUpdate({_id:id},{
+        password:bcrypt.hashSync(newpass, salt)
+      });
+      res.status(200).json('password updated successfully');
+    }
   } catch (error) {
     res.status(400).json({error});
   }
-})
+});
 
 app.listen(4000, () => {
   console.log("listening on port 4000");
