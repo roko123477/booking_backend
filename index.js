@@ -292,8 +292,8 @@ app.post("/booking", async (req, res) => {
           },
         ],
         mode: "payment",
-        success_url: `http://127.0.0.1:5173/account/bookings/${bookPlace._id}`,
-        cancel_url: `http://127.0.0.1:5173/cancel/${bookPlace._id}`,
+        success_url: `${process.env.CLIENT_URL}/account/bookings/${bookPlace._id}`,
+        cancel_url: `${process.env.CLIENT_URL}/cancel/${bookPlace._id}`,
       });
       // console.log(session);
       res.send({ url: session.url });
@@ -570,6 +570,8 @@ app.post("/changepass", async(req, res) => {
   }
 });
 
-app.listen(4000, () => {
-  console.log("listening on port 4000");
+const port=process.env.PORT || 4000;
+
+app.listen(port, () => {
+  console.log(`listening on port ${port}`);
 });
