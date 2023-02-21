@@ -19,11 +19,11 @@ const jwt = require("jsonwebtoken");
 const { format, differenceInCalendarDays } = require("date-fns");
 const cookieParser = require("cookie-parser");
 
-const imageDownloader = require("image-downloader");
+// const imageDownloader = require("image-downloader");
 const multer = require("multer");
 const { storage, cloudinary } = require("./cloudinary");
 const uploadMiddleware = multer({ storage });
-const fs = require("fs");
+// const fs = require("fs");
 const salt = bcrypt.genSaltSync(12);
 const jwtSecret = process.env.JWT_SECRET;
 
@@ -38,7 +38,7 @@ app.use(express.json({ limit: "50mb" }));
 app.use(
   cors({
     credentials: true,
-    origin: " http://127.0.0.1:5173",
+    origin: process.env.CLIENT_URL,
   })
 );
 mongoose.set("strictQuery", true);
