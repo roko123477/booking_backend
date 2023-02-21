@@ -38,7 +38,7 @@ app.use(express.json({ limit: "50mb" }));
 app.use(
   cors({
     credentials: true,
-  
+    origin: process.env.CLIENT_URL,
   })
 );
 mongoose.set("strictQuery", true);
