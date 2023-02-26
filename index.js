@@ -3,8 +3,11 @@ const dotenv = require("dotenv");
 const mongoose = require("mongoose");
 const User = require("./models/User");
 const Place = require("./models/Place");
+const Review = require("./models/Review");
 const Booking = require("./models/Booking");
 const bcrypt = require("bcryptjs");
+
+const mongoSanitize = require("express-mongo-sanitize");
 const otpGenerator = require("otp-generator");
 const nodemailer = require("nodemailer");
 const Mailgen = require("mailgen");
@@ -19,6 +22,13 @@ const jwt = require("jsonwebtoken");
 const { format, differenceInCalendarDays } = require("date-fns");
 const cookieParser = require("cookie-parser");
 
+mongoose.set("strictQuery", true);
+const db_url = process.env.MONGO_URL;
+mongoose
+  .connect(db_url)
+  .then(() => console.log("database connected"))
+  .catch((err) => console.log(err));
+
 // const imageDownloader = require("image-downloader");
 const multer = require("multer");
 const { storage, cloudinary } = require("./cloudinary");
@@ -30,10 +40,21 @@ const jwtSecret = process.env.JWT_SECRET;
 const cors = require("cors");
 const app = express();
 app.disable("x-powered-by");
+
 app.use(cookieParser());
+
+app.use(
+  mongoSanitize({
+    replaceWith: "_",
+  })
+);
 
 app.use("/uploads", express.static(__dirname + "/uploads"));
 app.use(express.json({ limit: "50mb" }));
+
+
+
+//this session should come first
 
 app.use(
   cors({
@@ -41,12 +62,6 @@ app.use(
     origin: process.env.CLIENT_URL,
   })
 );
-mongoose.set("strictQuery", true);
-const db_url = process.env.MONGO_URL;
-mongoose
-  .connect(db_url)
-  .then(() => console.log("database connected"))
-  .catch((err) => console.log(err));
 
 app.get("/test", (req, res) => {
   res.json("test ok");
@@ -78,6 +93,7 @@ app.post("/register", async (req, res) => {
 
 app.post("/login", async (req, res) => {
   const { email, password } = req.body;
+ 
   try {
     const userDoc = await User.findOne({ email });
 
@@ -90,7 +106,7 @@ app.post("/login", async (req, res) => {
           {},
           (err, token) => {
             if (err) throw err;
-            res.cookie("token", token,{ sameSite: 'none', secure: true}).json(userDoc);
+            res.cookie("token", token).json(userDoc);
           }
         );
       } else {
@@ -106,6 +122,7 @@ app.post("/login", async (req, res) => {
 
 app.get("/profile", (req, res) => {
   const { token } = req.cookies;
+ // console.log(token);
   if (token) {
     jwt.verify(token, jwtSecret, {}, async (err, user) => {
       if (err) throw err;
@@ -118,7 +135,9 @@ app.get("/profile", (req, res) => {
 });
 
 app.post("/logout", (req, res) => {
+ 
   res.cookie("token", "").json(true);
+  // });
 });
 
 app.post("/upload-by-link", async (req, res) => {
@@ -551,26 +570,88 @@ app.get("/verifyotp", (req, res) => {
   }
 });
 
-app.post("/changepass", async(req, res) => {
-  const{oldpass,newpass,id}=req.body;
+app.post("/changepass", async (req, res) => {
+  const { oldpass, newpass, id } = req.body;
   try {
-    const user=await User.findOne({_id:id});
+    const user = await User.findOne({ _id: id });
     const passOk = bcrypt.compareSync(oldpass, user.password);
-    if(!passOk){
+    if (!passOk) {
       res.status(200).json("");
-    }
-    else{
-      await User.findOneAndUpdate({_id:id},{
-        password:bcrypt.hashSync(newpass, salt)
-      });
-      res.status(200).json('password updated successfully');
+    } else {
+      await User.findOneAndUpdate(
+        { _id: id },
+        {
+          password: bcrypt.hashSync(newpass, salt),
+        }
+      );
+      res.status(200).json("password updated successfully");
     }
   } catch (error) {
-    res.status(400).json({error});
+    res.status(400).json({ error });
   }
 });
 
-const port=process.env.PORT || 4000;
+app.post("/reviews", async (req, res) => {
+  const { starValue, review, placeId, userId } = req.body;
+  try {
+    await Review.create({
+      starValue,
+      owner: userId,
+      place: placeId,
+      review: review,
+    });
+    res.status(201).json("reviews created successfully");
+  } catch (error) {
+    res.status(400).json({ error });
+  }
+});
+
+app.post("/allreviews", async (req, res) => {
+  const { id } = req.body;
+  //console.log(req.body);
+  try {
+    const allReviews = await Review.find({}).populate("owner");
+    const newReviews = allReviews.filter(
+      (review) => review.place.toString() === id
+    );
+    res.status(200).json(newReviews);
+  } catch (err) {
+    res.status(400).json({ err });
+  }
+});
+
+app.post("/getavgstarvalues", async (req, res) => {
+  const { id } = req.body;
+  // console.log(id);
+  try {
+    const allReviews = await Review.find({});
+    const newReviews = allReviews.filter(
+      (review) => review.place.toString() === id
+    );
+    let sum = 0.0;
+    let len = newReviews.length;
+    for (let i = 0; i < newReviews.length; i++) {
+      //  console.log(object);
+      sum += newReviews[i].starValue;
+    }
+    //console.log(sum/len);
+    res.status(200).json({ avg: sum / len, users: len });
+  } catch (err) {
+    res.status(400).json({ err });
+  }
+});
+
+app.delete("/deletereview", async (req, res) => {
+  const { id, reviewId } = req.body;
+  try {
+    await Review.deleteOne({ _id: reviewId });
+    res.status(200).json("review deleted successfully");
+  } catch (err) {
+    res.status(400).json({ err });
+  }
+});
+
+const port = process.env.PORT || 4000;
 
 app.listen(port, () => {
   console.log(`listening on port ${port}`);
