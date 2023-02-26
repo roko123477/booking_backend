@@ -106,7 +106,7 @@ app.post("/login", async (req, res) => {
           {},
           (err, token) => {
             if (err) throw err;
-            res.cookie("token", token).json(userDoc);
+            res.cookie("token", token,{sameSite:'none', secure:true}).json(userDoc);
           }
         );
       } else {
@@ -135,7 +135,7 @@ app.get("/profile", (req, res) => {
 });
 
 app.post("/logout", (req, res) => {
-  res.cookie("token", "").json(true);
+  res.cookie("token", "",{sameSite:'none', secure:true}).json(true);
 });
 
 app.post("/upload-by-link", async (req, res) => {
